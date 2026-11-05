@@ -22,6 +22,7 @@
 | `apps/server/src/utils/media/generation.ts` | `referenceOrder` 白名单加入 `"comfyui"` | 宿主只把提示词引用映射（`{{ref N}}` 对应哪个素材）传给白名单内的供应商；没有它，H3 无法把引用转换为 `<Picture N>` / `<Video N>` / `<Audio N>` |
 | `apps/web/src/main.ts` | 第一行 `import "../../../local/web/secureContextPolyfill";` | 通过 `http://<IP>` 访问时页面不是安全上下文，浏览器不提供 `crypto.randomUUID`，前端会启动失败；`local/web/secureContextPolyfill.ts` 补齐它 |
 | `apps/server/src/app.ts` | import 并 `app.use(trustedNetworkGuard)`（放在 `cors()` 之前） | 可信网络模式下拒绝本机与 Tailscale 以外的来源 |
+| `apps/server/src/app.ts` | `autoInstallProviders` 在 `TOONFLOW_SKIP_CLOUD_PROVIDERS=1` 时为空数组 | 上游按内置供应商源码的版本号自动重装云端预置；不加这个开关，每次同步上游后 APIMart 等会被装回来，Agent 又会优先推荐它们 |
 | `apps/server/src/utils/workspace/index.ts` | `isLocalHostRequest` 中加 `if (isTrustedNetworkRequest(req)) return true;`；`resolveWorkspace` 的条件改为 `(getRuntimePlatform().local \|\| isTrustedNetworkRequest(req)) && …` | 约 50 个“仅限本机”的接口都经由这两个函数；可信设备因此等同本机，可以打开任意目录 |
 | `apps/server/src/utils/mobileLink/index.ts` | `assertMobileLinkControl` 中 `!localSocket \|\| !localHost` 改为 `!(isTrustedNetworkRequest(req) \|\| localSocket && localHost)` | 设备互联有一套独立的本机判断 |
 | `apps/server/src/routes/workspaces/list.ts` | `root` 改为 `trustedBrowseRoot(req) ?? await …getWorkspaceRoot(req)` | 可信设备的目录选择器从 `TOONFLOW_BROWSE_ROOT` 开始浏览，而不是服务器工作区 |
@@ -41,7 +42,7 @@
 bun local/scripts/install.ts --server http://127.0.0.1:3000
 ```
 
-它通过 Toonflow 自己的接口安装或更新两个媒体供应商，并把 Magpie 的模型列表（含上下文长度、推理档位）写成文本供应商 `magpie`。修改 `providers/*.ts` 后重新执行即可覆盖。Magpie 新增模型后也重新执行。
+它通过 Toonflow 自己的接口安装或更新两个媒体供应商，卸载上游预装但未配置密钥的云端供应商（APIMart、秘塔、优云智算；加 `--keep-cloud` 可保留），并把 Magpie 的模型列表（含上下文长度、推理档位）写成文本供应商 `magpie`。修改 `providers/*.ts` 后重新执行即可覆盖。Magpie 新增模型后也重新执行。
 
 ## 局域网 / Tailscale 访问
 
@@ -66,6 +67,7 @@ bun local/scripts/serve.ts
 | `TOONFLOW_TRUSTED_NETWORKS` | `tailscale` | 逗号分隔的 CIDR、IP 或别名 `tailscale`（`100.64.0.0/10`、`fd7a:115c:a1e0::/48`）。本机回环地址始终可信 |
 | `TOONFLOW_BROWSE_ROOT` | 仓库所在磁盘的根目录（如 `F:\`） | 可信设备的目录选择器从这里开始浏览。⚠️ 选择器每行都带“删除”和“重命名”按钮，根目录设得越大，误操作的影响越大；建议设成专门放项目的目录 |
 | `TOONFLOW_SERVER_PORT` | `3000` | 端口 |
+| `TOONFLOW_SKIP_CLOUD_PROVIDERS` | `1` | 不自动重装上游的云端媒体供应商预置 |
 
 其他说明：
 

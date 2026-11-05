@@ -11,6 +11,8 @@ import { parse, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "../..");
 process.env.TOONFLOW_TRUSTED_NETWORKS ??= "tailscale";
 process.env.TOONFLOW_BROWSE_ROOT ??= parse(root).root;
+// 只用本地模型：不让上游在内置供应商更新后把云端预置（APIMart、秘塔、优云智算）装回来。
+process.env.TOONFLOW_SKIP_CLOUD_PROVIDERS ??= "1";
 if (process.env.NODE_ENV === "dev") delete process.env.NODE_ENV;
 console.log(`可信网络：${process.env.TOONFLOW_TRUSTED_NETWORKS}；目录浏览根：${process.env.TOONFLOW_BROWSE_ROOT}`);
 await import("../../apps/server/src/index.ts");

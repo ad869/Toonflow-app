@@ -4,6 +4,7 @@
  *   bun local/scripts/install.ts                      # 默认 http://127.0.0.1:3000
  *   bun local/scripts/install.ts --server http://127.0.0.1:3311 --magpie http://127.0.0.1:3425/v1
  *   bun local/scripts/install.ts --skip-text          # 只装媒体供应商
+ *   bun local/scripts/install.ts --keep-cloud         # 保留上游预装的云端媒体供应商（默认卸载未配置的）
  *
  * 只走 Toonflow 自己的接口（与设置页相同的校验与写入），不直接改数据目录，桌面版和源码版都适用。
  * 已安装的同名供应商会被覆盖为本目录中的版本；其他供应商与设置保持不变。
@@ -27,6 +28,23 @@ async function api<T>(path: string, init: RequestInit = {}) {
   const body = await response.json().catch(() => ({})) as { data?: T; message?: string };
   if (!response.ok) throw Object.assign(new Error(`${path}：HTTP ${response.status} ${body.message ?? ""}`), { status: response.status });
   return body.data as T;
+}
+
+// 上游首次启动时预装的云端媒体供应商。未配置密钥时本来就不可用，但会让 Agent 优先推荐“同款”云端模型，因此卸载。
+const cloudPresets = ["apiMart.ts", "compshare.ts", "metaso.ts"];
+
+async function removeCloudPresets() {
+  const installed = await api<{ fileName: string; revision: string }[]>("/providers/media/list");
+  const settings = await api<{ mediaProviderConfigs?: Record<string, Record<string, unknown>> }>("/settings/get");
+  for (const provider of installed.filter(item => cloudPresets.includes(item.fileName))) {
+    const config = settings.mediaProviderConfigs?.[provider.fileName.slice(0, -3)] ?? {};
+    if (Object.values(config).some(value => typeof value === "string" ? value.trim() : value != null)) {
+      console.log(`保留云端供应商 ${provider.fileName}：已填写配置`);
+      continue;
+    }
+    await api("/providers/media/delete", { method: "DELETE", body: JSON.stringify({ fileName: provider.fileName, revision: provider.revision }) });
+    console.log(`已卸载未配置的云端供应商 ${provider.fileName}（源文件在 packages/providers/src/media，可随时重新导入）`);
+  }
 }
 
 async function installMediaProviders() {
@@ -69,4 +87,5 @@ async function installTextProvider() {
 }
 
 await installMediaProviders();
+if (!args.includes("--keep-cloud")) await removeCloudPresets();
 if (!args.includes("--skip-text")) await installTextProvider();

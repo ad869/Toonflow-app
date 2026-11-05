@@ -14,7 +14,7 @@ import { trustedNetworkGuard } from "../../../local/server/trustedNetwork";
 import { languageRequest, setLocaleFallback, translateError, translateMessage } from "@/lib/i18n";
 import { detectLocale, normalizeLocale } from "@toonflow/i18n";
 
-const autoInstallProviders = ["apiMart.ts", "metaso.ts", "compshare.ts"];
+const autoInstallProviders = process.env.TOONFLOW_SKIP_CLOUD_PROVIDERS === "1" ? [] : ["apiMart.ts", "metaso.ts", "compshare.ts"];
 
 export async function createApp({
   webRoot,
