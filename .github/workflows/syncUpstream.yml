@@ -1,0 +1,84 @@
+# 本地化分支（local）每天自动合并上游 HBAI-Ltd/Toonflow-app 的 master。
+# 说明见 local/readme.md。合并冲突或检查失败时不推送，改为开一个 issue。
+name: 同步上游
+
+on:
+  schedule:
+    - cron: "0 20 * * *" # 每天北京时间 04:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: syncUpstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository != 'HBAI-Ltd/Toonflow-app'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: local
+          fetch-depth: 0
+          # 上游修改 .github/workflows 时，GITHUB_TOKEN 无权推送；需配置带 workflow 权限的 SYNC_TOKEN。
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: 合并上游 master
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/HBAI-Ltd/Toonflow-app.git
+          git fetch upstream master
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "已包含上游最新提交"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "upstream=$(git rev-parse --short upstream/master)" >> "$GITHUB_OUTPUT"
+          if ! git merge --no-edit upstream/master; then
+            git diff --name-only --diff-filter=U > conflicts.txt
+            git merge --abort
+            echo "failure=合并冲突" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.merge.outputs.changed == 'true'
+        with:
+          bun-version: 1.4.3
+
+      - name: 检查本地化改动仍然可用
+        id: check
+        if: steps.merge.outputs.changed == 'true'
+        run: |
+          bun install --frozen-lockfile
+          ./node_modules/.bin/tsc -p local/tsconfig.json
+          bun local/scripts/check.ts
+
+      - name: 推送
+        if: steps.merge.outputs.changed == 'true'
+        run: |
+          git push origin upstream/master:refs/heads/master
+          git push origin HEAD:local
+
+      - name: 失败时开 issue
+        if: failure()
+        run: |
+          reason="${{ steps.merge.outputs.failure || '合并后检查失败' }}"
+          {
+            echo "上游 master \`${{ steps.merge.outputs.upstream }}\` 未能自动合并到 \`local\`：${reason}。"
+            echo
+            if [ -s conflicts.txt ]; then echo "冲突文件："; sed 's/^/- `/; s/$/`/' conflicts.txt; echo; fi
+            echo "运行记录：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "本地处理：\`bun local/scripts/sync.ts\`，见 local/readme.md。"
+          } > body.md
+          gh issue create --title "同步上游失败：${reason}" --body-file body.md
