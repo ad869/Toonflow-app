@@ -10,6 +10,7 @@ import { errorFromCause } from "@/lib/responseFormat";
 import desktopRequest from "@/lib/desktop";
 import { getRuntimePlatform } from "@/lib/platform";
 import initializePlugins from "@/utils/plugins/initialize";
+import { trustedNetworkGuard } from "../../../local/server/trustedNetwork";
 import { languageRequest, setLocaleFallback, translateError, translateMessage } from "@/lib/i18n";
 import { detectLocale, normalizeLocale } from "@toonflow/i18n";
 
@@ -107,6 +108,7 @@ export async function createApp({
     await buildRoute();
     app.use(logger("dev"));
   }
+  app.use(trustedNetworkGuard);
   app.use(cors());
   app.use(languageRequest);
   const { initializeMultiTenantRuntime, multiTenantAccess } = await import("@/utils/multiTenant/runtime");

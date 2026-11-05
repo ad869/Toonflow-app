@@ -5,11 +5,12 @@ import { z } from "zod";
 import u from "@/utils";
 import { validateFields } from "@/lib/middleware";
 import { error, success } from "@/lib/responseFormat";
+import { trustedBrowseRoot } from "../../../../../local/server/trustedNetwork";
 
 const router = Router();
 
 export default router.get("/", validateFields({ path: z.string().max(4096).optional() }, "query"), async (req, res) => {
-  const root = await u.workspace.getWorkspaceRoot(req);
+  const root = trustedBrowseRoot(req) ?? await u.workspace.getWorkspaceRoot(req);
   const target = resolve(root, (req.query.path as string | undefined) ?? "");
   if (!u.workspaceFile.isWithin(root, target)) return res.status(403).json(error("只能选择服务器工作区内的目录", null, 403));
   try {

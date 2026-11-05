@@ -4,10 +4,12 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import conf from "@/utils/conf";
 import { getMobileLinkConfig, isMobileLinkRequest } from "@/utils/mobileLink";
 import { getRuntimePlatform } from "@/lib/platform";
+import { isTrustedNetworkRequest } from "../../../../../local/server/trustedNetwork";
 
 export function isLocalHostRequest(req: Request) {
   if (isMobileLinkRequest(req) || req.res?.locals.multiTenantWeb || req.res?.locals.multiTenantUser?.role === "user") return false;
   if (conf.get("settings", {}).multiTenantEnabled === true && req.res?.locals.multiTenantUser?.role !== "admin") return false;
+  if (isTrustedNetworkRequest(req)) return true;
   const localAddress = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "") && req.get("x-toonflow-local-client") !== "0";
   const localHost = ["localhost", "127.0.0.1", "[::1]"].includes(req.hostname);
   return localAddress && localHost;
@@ -66,7 +68,7 @@ export async function resolveWorkspace(req: Request, path: string) {
     if (offset !== ".." && !offset.startsWith(`..${sep}`) && !isAbsolute(offset)) return directory;
     throw Object.assign(new Error("只能访问当前账号的工作区"), { status: 403 });
   }
-  if (getRuntimePlatform().local && isLocalWorkspaceRequest(req)) return directory;
+  if ((getRuntimePlatform().local || isTrustedNetworkRequest(req)) && isLocalWorkspaceRequest(req)) return directory;
 
   if (isMobileLinkRequest(req)) {
     for (const root of getMobileLinkConfig().directories) {

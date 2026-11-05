@@ -21,6 +21,13 @@
 | --- | --- | --- |
 | `apps/server/src/utils/media/generation.ts` | `referenceOrder` 白名单加入 `"comfyui"` | 宿主只把提示词引用映射（`{{ref N}}` 对应哪个素材）传给白名单内的供应商；没有它，H3 无法把引用转换为 `<Picture N>` / `<Video N>` / `<Audio N>` |
 | `apps/web/src/main.ts` | 第一行 `import "../../../local/web/secureContextPolyfill";` | 通过 `http://<IP>` 访问时页面不是安全上下文，浏览器不提供 `crypto.randomUUID`，前端会启动失败；`local/web/secureContextPolyfill.ts` 补齐它 |
+| `apps/server/src/app.ts` | import 并 `app.use(trustedNetworkGuard)`（放在 `cors()` 之前） | 可信网络模式下拒绝本机与 Tailscale 以外的来源 |
+| `apps/server/src/utils/workspace/index.ts` | `isLocalHostRequest` 中加 `if (isTrustedNetworkRequest(req)) return true;`；`resolveWorkspace` 的条件改为 `(getRuntimePlatform().local \|\| isTrustedNetworkRequest(req)) && …` | 约 50 个“仅限本机”的接口都经由这两个函数；可信设备因此等同本机，可以打开任意目录 |
+| `apps/server/src/utils/mobileLink/index.ts` | `assertMobileLinkControl` 中 `!localSocket \|\| !localHost` 改为 `!(isTrustedNetworkRequest(req) \|\| localSocket && localHost)` | 设备互联有一套独立的本机判断 |
+| `apps/server/src/routes/workspaces/list.ts` | `root` 改为 `trustedBrowseRoot(req) ?? await …getWorkspaceRoot(req)` | 可信设备的目录选择器从 `TOONFLOW_BROWSE_ROOT` 开始浏览，而不是服务器工作区 |
+| `apps/server/src/routes/channel/community/getAdvertisements.ts` | 整个文件改为直接返回空广告 | 去掉首页页头横幅和侧栏推广，不再请求官方云端 |
+
+可信网络相关的逻辑都在 `local/server/trustedNetwork.ts` 中。上表中这几处上游文件改动只是调用它；未设置 `TOONFLOW_TRUSTED_NETWORKS` 时，行为与上游一致。
 
 ## 首次安装
 
@@ -38,18 +45,32 @@ bun local/scripts/install.ts --server http://127.0.0.1:3000
 
 ## 局域网 / Tailscale 访问
 
-开发模式（`bun run dev`，`NODE_ENV=dev`）只信任 `localhost`：从其他设备打开时，设置、供应商管理等接口会返回 403。多设备访问请使用上游自带的**服务器部署模式**，不需要改代码：
+开发模式（`bun run dev`）只信任 `localhost`。多设备访问请先构建，再用本 fork 的启动脚本以服务器部署模式运行：
 
 ```bash
 bun run build:tools && bun run build:ext && bun run build:nodes && bun run --filter '@toonflow/web' build
-bun apps/server/src/index.ts        # 不设 NODE_ENV；默认端口 3000，可用 TOONFLOW_SERVER_PORT 修改
+bun local/scripts/serve.ts
 ```
 
-- 后端直接提供网页，监听所有网卡：本机打开 `http://localhost:3000`，Tailscale 设备打开 `http://<本机 Tailscale IP>:3000`。
-- 浏览器在 `http://<IP>` 下会禁用部分接口。`crypto.randomUUID` 已经补齐，可以正常使用；但**复制到剪贴板、语音输入（麦克风）、手机扫码连接**这三项在 http 下不可用。需要它们时改用 HTTPS：在 Tailscale 后台启用 Serve 后执行 `tailscale serve --bg --https=443 http://127.0.0.1:3000`，然后打开 `https://<机器名>.<tailnet>.ts.net`。
-- 项目统一放在数据目录的 `workspaces/` 下，所有设备共用；这个模式下不能选择本机的任意文件夹，这是上游的安全边界。
+`serve.ts` 会开启**可信网络**模式：
+
+- **本机和 Tailscale 设备等同本机**：设置、插件、技能、MCP、节点、工具、团队管理、设备互联全部可用；可以把这台电脑上的任意文件夹作为工作区。不需要登录。
+- **其他来源一律 403**：局域网 192.168.x 等设备访问会被拒绝，不需要再改防火墙。
+- 后端直接提供网页，监听所有网卡：本机打开 `http://localhost:3000`，Tailscale 设备打开 `http://<本机 Tailscale IP>:3000`，也可以用 MagicDNS 名（如 `http://pc:3000`）。
+- 防 DNS 重绑定：除了检查来源 IP，访问用的主机名也必须是 IP、localhost、不带点的短名或 `*.ts.net`，否则按普通远程请求处理。
+
+可用环境变量调整：
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `TOONFLOW_TRUSTED_NETWORKS` | `tailscale` | 逗号分隔的 CIDR、IP 或别名 `tailscale`（`100.64.0.0/10`、`fd7a:115c:a1e0::/48`）。本机回环地址始终可信 |
+| `TOONFLOW_BROWSE_ROOT` | 仓库所在磁盘的根目录（如 `F:\`） | 可信设备的目录选择器从这里开始浏览。⚠️ 选择器每行都带“删除”和“重命名”按钮，根目录设得越大，误操作的影响越大；建议设成专门放项目的目录 |
+| `TOONFLOW_SERVER_PORT` | `3000` | 端口 |
+
+其他说明：
+
+- 浏览器在 `http://<IP>` 下会禁用部分接口。`crypto.randomUUID` 已经补齐，可以正常使用；但**复制到剪贴板、语音输入（麦克风）、手机扫码连接**这三项在 http 下不可用。需要它们时改用 HTTPS：在 Tailscale 后台启用 Serve 后执行 `tailscale serve --bg --https=443 http://127.0.0.1:3000`，然后打开 `https://<机器名>.<tailnet>.ts.net`（经本机代理转发的请求同样可信）。
 - Magpie、ComfyUI 仍然只监听 `127.0.0.1`。它们由服务端调用，远程设备不需要直接访问。
-- 这个模式**没有登录**，能访问这个端口的人都能使用全部功能。请用防火墙把端口限制在 Tailscale 内：Tailscale 网卡是“专用”网络，因此把 bun.exe 的入站规则改为只允许“专用”配置文件即可（需要管理员权限）。如果需要账号隔离，可以使用上游的多租户模式。
 - 拉取上游更新或修改前端后，要重新执行上面的构建命令。
 
 ## 分支与同步
