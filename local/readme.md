@@ -20,6 +20,7 @@
 | 上游文件 | 改动 | 原因 |
 | --- | --- | --- |
 | `apps/server/src/utils/media/generation.ts` | `referenceOrder` 白名单加入 `"comfyui"` | 宿主只把提示词引用映射（`{{ref N}}` 对应哪个素材）传给白名单内的供应商；没有它，H3 无法把引用转换为 `<Picture N>` / `<Video N>` / `<Audio N>` |
+| `apps/web/src/main.ts` | 第一行 `import "../../../local/web/secureContextPolyfill";` | 通过 `http://<IP>` 访问时页面不是安全上下文，浏览器不提供 `crypto.randomUUID`，前端会启动失败；`local/web/secureContextPolyfill.ts` 补齐它 |
 
 ## 首次安装
 
@@ -45,6 +46,7 @@ bun apps/server/src/index.ts        # 不设 NODE_ENV；默认端口 3000，可�
 ```
 
 - 后端直接提供网页，监听所有网卡：本机打开 `http://localhost:3000`，Tailscale 设备打开 `http://<本机 Tailscale IP>:3000`。
+- 浏览器在 `http://<IP>` 下会禁用部分接口。`crypto.randomUUID` 已经补齐，可以正常使用；但**复制到剪贴板、语音输入（麦克风）、手机扫码连接**这三项在 http 下不可用。需要它们时改用 HTTPS：在 Tailscale 后台启用 Serve 后执行 `tailscale serve --bg --https=443 http://127.0.0.1:3000`，然后打开 `https://<机器名>.<tailnet>.ts.net`。
 - 项目统一放在数据目录的 `workspaces/` 下，所有设备共用；这个模式下不能选择本机的任意文件夹，这是上游的安全边界。
 - Magpie、ComfyUI 仍然只监听 `127.0.0.1`。它们由服务端调用，远程设备不需要直接访问。
 - 这个模式**没有登录**，能访问这个端口的人都能使用全部功能。请用防火墙把端口限制在 Tailscale 内：Tailscale 网卡是“专用”网络，因此把 bun.exe 的入站规则改为只允许“专用”配置文件即可（需要管理员权限）。如果需要账号隔离，可以使用上游的多租户模式。
