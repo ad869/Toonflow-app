@@ -35,6 +35,21 @@ bun local/scripts/install.ts --server http://127.0.0.1:3000
 
 它通过 Toonflow 自己的接口安装或更新两个媒体供应商，并把 Magpie 的模型列表（含上下文长度、推理档位）写成文本供应商 `magpie`。修改 `providers/*.ts` 后重新执行即可覆盖。Magpie 新增模型后也重新执行。
 
+## 局域网 / Tailscale 访问
+
+开发模式（`bun run dev`，`NODE_ENV=dev`）只信任 `localhost`：从其他设备打开时，设置、供应商管理等接口会返回 403。多设备访问请使用上游自带的**服务器部署模式**，不需要改代码：
+
+```bash
+bun run build:tools && bun run build:ext && bun run build:nodes && bun run --filter '@toonflow/web' build
+bun apps/server/src/index.ts        # 不设 NODE_ENV；默认端口 3000，可用 TOONFLOW_SERVER_PORT 修改
+```
+
+- 后端直接提供网页，监听所有网卡：本机打开 `http://localhost:3000`，Tailscale 设备打开 `http://<本机 Tailscale IP>:3000`。
+- 项目统一放在数据目录的 `workspaces/` 下，所有设备共用；这个模式下不能选择本机的任意文件夹，这是上游的安全边界。
+- Magpie、ComfyUI 仍然只监听 `127.0.0.1`。它们由服务端调用，远程设备不需要直接访问。
+- 这个模式**没有登录**，能访问这个端口的人都能使用全部功能。请用防火墙把端口限制在 Tailscale 内：Tailscale 网卡是“专用”网络，因此把 bun.exe 的入站规则改为只允许“专用”配置文件即可（需要管理员权限）。如果需要账号隔离，可以使用上游的多租户模式。
+- 拉取上游更新或修改前端后，要重新执行上面的构建命令。
+
 ## 分支与同步
 
 - `master`：上游 `master` 的纯镜像，不做任何提交。
