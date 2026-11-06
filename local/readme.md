@@ -91,6 +91,19 @@ bun local/scripts/serve.ts
 - Magpie、ComfyUI 仍然只监听 `127.0.0.1`。它们由服务端调用，远程设备不需要直接访问。
 - 拉取上游更新或修改前端后，要重新执行上面的构建命令。
 
+### 登录后自动启动
+
+本机用启动文件夹（`shell:startup`）里的两个快捷方式，登录 Windows 后用隐藏窗口启动。这和 ComfyUI 的 `ComfyUI H3 Tailscale.lnk` 是同一时机，不需要管理员权限：
+
+| 快捷方式 | 启动内容 | 日志（每次启动覆盖） |
+| --- | --- | --- |
+| `Magpie Gateway.lnk` | `F:\dev\tools\magpie\magpie.exe serve` | `data\magpie.log`、`data\magpieError.log` |
+| `Toonflow.lnk` | 在仓库目录下执行 `bun local/scripts/serve.ts` | `data\serve.log`、`data\serveError.log` |
+
+- 不用 `magpie autostart on`：它启动的是托盘程序，实测不会带起 3425 端口的网关。
+- 重复启动：Toonflow 发现端口被占用会直接退出；Magpie 会多出一个待命进程，等前一个退出后才接管网关。两种情况都不影响使用，但日志会被新进程覆盖。
+- 要停止自动启动，删除对应的快捷方式即可。
+
 ## 分支与同步
 
 - `master`：上游 `master` 的纯镜像，不做任何提交。
