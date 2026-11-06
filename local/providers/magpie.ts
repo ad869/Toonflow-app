@@ -54,9 +54,13 @@ function imagePrompt(request: ImageRequest) {
   return request.ratio ? `${prompt}\n\n画面比例：${request.ratio}` : prompt;
 }
 
-async function bytesOf(context: ProviderContext, input: MediaInput) {
-  if (input.type === "binary") return input.data;
-  if (input.type === "base64") return new Uint8Array(Buffer.from(input.data.replace(/^data:[^;]+;base64,/, ""), "base64"));
+// ACT: 只解码一次，不再复制 base64 字符串和字节，减少大参考图的内存峰值。
+async function bytesOf(context: ProviderContext, input: MediaInput): Promise<Uint8Array<ArrayBuffer>> {
+  if (input.type === "binary") return input.data as Uint8Array<ArrayBuffer>;
+  if (input.type === "base64") {
+    const data = input.data.startsWith("data:") ? input.data.slice(input.data.indexOf(",") + 1) : input.data;
+    return Buffer.from(data, "base64") as Uint8Array<ArrayBuffer>;
+  }
   const response = await context.tool.fetch(input.url);
   if (!response.ok) throw new Error(`读取参考图失败：HTTP ${response.status}`);
   return new Uint8Array(await response.arrayBuffer());
@@ -108,7 +112,7 @@ export default {
       for (const [index, image] of request.images.entries()) {
         const mimeType = image.mimeType ?? "image/png";
         parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="image[]"; filename="reference${index + 1}.${mimeType.split("/")[1] || "png"}"\r\nContent-Type: ${mimeType}\r\n\r\n`,
-          new Uint8Array(await bytesOf(this, image)), "\r\n");
+          await bytesOf(this, image), "\r\n");
       }
       parts.push(`--${boundary}--\r\n`);
       response = await this.tool.fetch(`${baseUrl}/images/edits`, {

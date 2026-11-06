@@ -90,9 +90,13 @@ async function comfy(context: ProviderContext, path: string, signal: AbortSignal
   return JSON.parse(text) as Record<string, any>;
 }
 
-async function bytesOf(context: ProviderContext, input: MediaInput) {
-  if (input.type === "binary") return input.data;
-  if (input.type === "base64") return new Uint8Array(Buffer.from(input.data.replace(/^data:[^;]+;base64,/, ""), "base64"));
+// ACT: 宿主传入的参考素材是整段 base64，几十 MB 的视频会在内存里放大数倍；这里不再额外复制字符串或字节，只解码一次。
+async function bytesOf(context: ProviderContext, input: MediaInput): Promise<Uint8Array<ArrayBuffer>> {
+  if (input.type === "binary") return input.data as Uint8Array<ArrayBuffer>;
+  if (input.type === "base64") {
+    const data = input.data.startsWith("data:") ? input.data.slice(input.data.indexOf(",") + 1) : input.data;
+    return Buffer.from(data, "base64") as Uint8Array<ArrayBuffer>;
+  }
   const response = await context.tool.fetch(input.url);
   if (!response.ok) throw new Error(`读取参考素材失败：HTTP ${response.status}`);
   return new Uint8Array(await response.arrayBuffer());
@@ -107,7 +111,7 @@ async function upload(context: ProviderContext, input: MediaInput, signal: Abort
   const field = (key: string, value: string) => `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`;
   const body = new Blob([
     `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="${name}"\r\nContent-Type: ${mimeType}\r\n\r\n`,
-    new Uint8Array(bytes), "\r\n",
+    bytes, "\r\n",
     field("type", "input"), field("subfolder", "toonflow"), field("overwrite", "true"),
     `--${boundary}--\r\n`,
   ]);
@@ -205,16 +209,65 @@ function videoPrompt(request: ReferencedVideoRequest, frameMode: boolean) {
     .replace(/@audio\s?(\d+)/gi, "<Audio $1>");
 }
 
+type KeyframePlan = { first?: MediaInput; last?: MediaInput; keys: { image: MediaInput; seconds: number }[]; prompt: string };
+
+const keyframeLine = /^[ \t]*[@＠](首帧|尾帧|关键帧)[ \t]*(?:(\d+(?:\.\d+)?)[ \t]*(?:s|秒))?[ \t]*[:：]?[ \t]*\{\{ref (\d+)\}\}[ \t]*$/gm;
+
+/**
+ * 提示词中单独成行的 @首帧 / @关键帧 1.5s / @尾帧 {{ref N}} 指令：把参考模式连入的图片分配为首尾帧和中途关键帧。
+ * 中途关键帧走 MiniMaxH3AddGuide，文本编码器看不到它们，所以正文里的引用改写成“关键姿态”，不称作 Picture。
+ */
+function keyframePlan(request: ReferencedVideoRequest, duration: number): KeyframePlan | undefined {
+  const matches = [...request.prompt.matchAll(keyframeLine)];
+  if (!matches.length) return;
+  if (request.videos?.length || request.audios?.length) throw new Error("关键帧方式只使用图片，请去掉参考视频和参考音频");
+  const images = request.images ?? [];
+  const plan: KeyframePlan = { keys: [], prompt: "" };
+  const roles = new Map<number, "first" | "last" | "key">();
+  for (const [, role, time, ref] of matches) {
+    const reference = request.referenceOrder?.[Number(ref) - 1];
+    const index = reference ? reference.type === "image" && "index" in reference ? reference.index : -1 : Number(ref) - 1;
+    const image = images[index];
+    if (!image) throw new Error(`关键帧指令中的 {{ref ${ref}}} 不是已连接的图片`);
+    if (roles.has(index)) throw new Error(`第 ${index + 1} 张图片被多条关键帧指令重复使用`);
+    if (role === "关键帧") {
+      const seconds = Number(time);
+      if (!time || !(seconds > 0 && seconds < duration)) throw new Error(`@关键帧 需要写 0–${duration} 秒之间的时间，例如 @关键帧 1.5s {{ref 2}}`);
+      plan.keys.push({ image, seconds });
+      roles.set(index, "key");
+      continue;
+    }
+    const slot = role === "首帧" ? "first" : "last";
+    if (plan[slot]) throw new Error(`只能有一条 @${role}`);
+    plan[slot] = image;
+    roles.set(index, slot);
+  }
+  const unused = images.map((_, index) => index).filter(index => !roles.has(index));
+  if (unused.length) throw new Error(`关键帧方式下每张连接的图片都要用指令指定用途，第 ${unused.map(index => index + 1).join("、")} 张未使用`);
+  if (plan.keys.length > 7) throw new Error("每段最多 7 张中途关键帧");
+  plan.keys.sort((left, right) => left.seconds - right.seconds);
+  const label = { first: "Picture 1", last: plan.first ? "Picture 2" : "Picture 1", key: "关键姿态" };
+  plan.prompt = request.prompt.replace(keyframeLine, "").replace(/\{\{ref (\d+)\}\}/g, (marker, number: string) => {
+    const reference = request.referenceOrder?.[Number(number) - 1];
+    const role = roles.get(reference ? "index" in reference ? reference.index : -1 : Number(number) - 1);
+    return role ? label[role] : marker;
+  }).replace(/\n{3,}/g, "\n\n").trim();
+  return plan;
+}
+
 async function videoGraph(context: ProviderContext, request: ReferencedVideoRequest, signal: AbortSignal) {
   const duration = request.duration ?? 5;
   if (!Number.isInteger(duration) || duration < 4 || duration > 15) throw new Error("本地 H3 只支持 4–15 秒的整数时长");
   if (request.resolution && request.resolution.toUpperCase() !== "768P") throw new Error("本地 H3 只支持 768P");
   const fast = request.model.endsWith("Fast");
-  const frameMode = !!(request.firstFrame || request.lastFrame);
+  const plan = keyframePlan(request, duration);
+  const firstFrame = plan ? plan.first : request.firstFrame;
+  const lastFrame = plan ? plan.last : request.lastFrame;
+  const frameMode = !!(firstFrame || lastFrame || plan);
   const length = framesFor(duration);
   const withAudio = request.generateAudio !== false;
   const recipe = frameMode ? h3.frames : h3.ref;
-  let prompt = videoPrompt(request, frameMode);
+  let prompt = plan ? plan.prompt : videoPrompt(request, frameMode);
   const graph: Graph = {
     "1": { class_type: "UNETLoader", inputs: { unet_name: recipe.unet, weight_dtype: "default" } },
     "2": { class_type: "LoraLoaderModelOnly", inputs: { model: ["1", 0], lora_name: recipe.lora, strength_model: 1.0 } },
@@ -236,22 +289,31 @@ async function videoGraph(context: ProviderContext, request: ReferencedVideoRequ
   let conditioning: [string, number] = ["20", 0];
 
   if (frameMode) {
-    const [width, height] = closestCanvas(...await context.tool.media.inspectImage((request.firstFrame ?? request.lastFrame)!)
+    const [width, height] = closestCanvas(...await context.tool.media.inspectImage((firstFrame ?? lastFrame ?? plan!.keys[0]!.image))
       .then(info => [info.width, info.height] as const));
     const inputs: Record<string, unknown> = { clip: ["3", 0], vae: ["4", 0], width, height, length };
     const align: string[] = [];
-    if (request.firstFrame) {
-      graph["10"] = { class_type: "LoadImage", inputs: { image: await upload(context, request.firstFrame, signal) } };
+    if (firstFrame) {
+      graph["10"] = { class_type: "LoadImage", inputs: { image: await upload(context, firstFrame, signal) } };
       inputs.first_frame = ["10", 0];
       align.push(`Picture ${align.length + 1} (from Shot 1) aligns with the 0.00-second mark of the target video`);
     }
-    if (request.lastFrame) {
-      graph["11"] = { class_type: "LoadImage", inputs: { image: await upload(context, request.lastFrame, signal) } };
+    if (lastFrame) {
+      graph["11"] = { class_type: "LoadImage", inputs: { image: await upload(context, lastFrame, signal) } };
       inputs.last_frame = ["11", 0];
       align.push(`Picture ${align.length + 1} (from Shot 1) aligns with the ${((length - 1) / h3.fps).toFixed(2)}-second mark of the target video`);
     }
-    inputs.prompt = `How the reference pictures align with the target video — ${align.join("; ")}.\n\n${prompt}`;
+    inputs.prompt = align.length ? `How the reference pictures align with the target video — ${align.join("; ")}.\n\n${prompt}` : prompt;
     graph["20"] = { class_type: "MiniMaxH3ImageToVideo", inputs };
+    // 中途关键帧逐个串联 AddGuide；latent 始终取 ImageToVideo 的输出，与 hypit 本机验证过的图一致。
+    for (const [index, key] of (plan?.keys ?? []).entries()) {
+      graph[`${12 + index}`] = { class_type: "LoadImage", inputs: { image: await upload(context, key.image, signal) } };
+      graph[`${50 + index}`] = { class_type: "MiniMaxH3AddGuide", inputs: {
+        positive: conditioning, latent: ["20", 1], vae: ["4", 0], image: [`${12 + index}`, 0],
+        frame_idx: Math.min(length - 2, Math.max(1, Math.round(key.seconds * h3.fps))),
+      } };
+      conditioning = [`${50 + index}`, 0];
+    }
   } else {
     const images = request.images ?? [], videos = request.videos ?? [], audios = request.audios ?? [];
     if (images.length > 9 || videos.length > 3 || audios.length > 3) throw new Error("本地 H3 最多 9 张参考图、3 段参考视频、3 段参考音频");
