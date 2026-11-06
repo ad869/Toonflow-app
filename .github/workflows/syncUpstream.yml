@@ -1,5 +1,5 @@
 # 本地化分支（local）每天自动合并上游 HBAI-Ltd/Toonflow-app 的 master。
-# 说明见 local/readme.md。合并冲突或检查失败时不推送，改为开一个 issue。
+# 说明见 local/readme.md。合并冲突或推送失败时开一个 issue。
 name: 同步上游
 
 on:
@@ -50,19 +50,6 @@ jobs:
             exit 1
           fi
 
-      - uses: oven-sh/setup-bun@v2
-        if: steps.merge.outputs.changed == 'true'
-        with:
-          bun-version: 1.4.3
-
-      - name: 检查本地化改动仍然可用
-        id: check
-        if: steps.merge.outputs.changed == 'true'
-        run: |
-          bun install --frozen-lockfile
-          ./node_modules/.bin/tsc -p local/tsconfig.json
-          bun local/scripts/check.ts
-
       - name: 推送
         if: steps.merge.outputs.changed == 'true'
         run: |
@@ -72,7 +59,7 @@ jobs:
       - name: 失败时开 issue
         if: failure()
         run: |
-          reason="${{ steps.merge.outputs.failure || '合并后检查失败' }}"
+          reason="${{ steps.merge.outputs.failure || '推送失败' }}"
           {
             echo "上游 master \`${{ steps.merge.outputs.upstream }}\` 未能自动合并到 \`local\`：${reason}。"
             echo

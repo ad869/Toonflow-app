@@ -1,7 +1,7 @@
 /**
- * 在本机把上游 master 合并进当前的本地化分支，并检查 local/ 下的适配文件仍能通过类型检查。
+ * 在本机把上游 master 合并进当前的本地化分支并安装依赖。
  *
- *   bun local/scripts/sync.ts                 # 合并 + 安装依赖 + 类型检查
+ *   bun local/scripts/sync.ts                 # 合并 + 安装依赖
  *   bun local/scripts/sync.ts --install http://127.0.0.1:3000   # 另外把适配文件重新装进运行中的 Toonflow
  *
  * 冲突时停在合并状态，由你解决后提交；不会自动推送。
@@ -30,12 +30,10 @@ if (output(["git", "status", "--porcelain"])) {
 if (!output(["git", "remote"]).split("\n").includes("upstream")) run(["git", "remote", "add", "upstream", upstream]);
 run(["git", "fetch", "upstream", "master"]);
 if (!run(["git", "merge", "--no-edit", "upstream/master"], true)) {
-  console.error("\n合并冲突。解决后 git add 并 git commit，再重新运行本脚本做检查。上游文件的本地改动清单见 local/readme.md。");
+  console.error("\n合并冲突。解决后 git add 并 git commit，再重新运行本脚本。上游文件的本地改动清单见 local/readme.md。");
   process.exit(1);
 }
 run(["bun", "install"]);
-run([resolve(root, "node_modules/.bin/tsc"), "-p", "local/tsconfig.json"]);
-run(["bun", "local/scripts/check.ts"]);
 const install = args.indexOf("--install");
 if (install >= 0) run(["bun", "local/scripts/install.ts", "--server", args[install + 1] ?? "http://127.0.0.1:3000"]);
 console.log("\n同步完成，确认无误后 git push origin HEAD");

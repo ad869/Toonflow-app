@@ -80,7 +80,7 @@ bun local/scripts/serve.ts
 - `master`：上游 `master` 的纯镜像，不做任何提交。
 - `local`：本 fork 的默认分支，等于 `master` + 本地化改动。日常开发从 `local` 拉分支，合回 `local`。
 
-**自动同步**：`.github/workflows/syncUpstream.yml` 每天北京时间 04:00 把上游 `master` 合并进 `local`，然后跑类型检查和 `scripts/check.ts`（用 Toonflow 自己的加载器解析并执行供应商文件），全部通过才推送；冲突或检查失败时不推送，开一个 issue。
+**自动同步**：`.github/workflows/syncUpstream.yml` 每天北京时间 04:00 把上游 `master` 合并进 `local` 并推送；冲突时不推送，开一个 issue。按 AGENTS.md 的“测试与检查边界”，这里不加自动检查，合并后需要的验证请手动执行（见“验证”）。
 
 需要在 fork 上做一次设置：
 
@@ -93,7 +93,7 @@ bun local/scripts/serve.ts
 bun local/scripts/sync.ts --install http://127.0.0.1:3000
 ```
 
-它合并上游 `master`，安装依赖，跑类型检查和 `check.ts`，最后把供应商重新装进运行中的 Toonflow。冲突时停在合并状态：按上表处理上游文件后提交，再运行一次。
+它合并上游 `master`、安装依赖，最后把供应商重新装进运行中的 Toonflow；安装接口本身会用上游的规则校验供应商文件。冲突时停在合并状态：按上表处理上游文件后提交，再运行一次。
 
 合并后重点看：`packages/providers/types.d.ts`（供应商契约）、`apps/server/src/utils/media/provider.ts`（加载与沙箱规则）、`apps/server/src/utils/media/generation.ts`（请求组装）。
 
@@ -119,6 +119,8 @@ bun local/scripts/sync.ts --install http://127.0.0.1:3000
 
 ## 验证
 
-- `bun local/scripts/check.ts`：解析加 VM 执行，不连接外部服务。
+需要时手动执行，不绑定到同步或构建：
+
 - `./node_modules/.bin/tsc -p local/tsconfig.json`：按 `packages/providers/types.d.ts` 做类型检查。
+- `bun local/scripts/install.ts`：安装时由 Toonflow 按“添加供应商”的规则解析供应商文件，出错会直接报出。
 - 端到端：先启动 Toonflow、Magpie、ComfyUI，然后在画布里分别用图片、视频、音频节点生成一次。
